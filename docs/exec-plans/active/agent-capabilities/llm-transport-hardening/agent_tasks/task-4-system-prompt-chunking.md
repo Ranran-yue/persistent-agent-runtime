@@ -1,6 +1,6 @@
-<!-- AGENT_TASK_START: task-8-system-prompt-chunking.md -->
+<!-- AGENT_TASK_START: task-4-system-prompt-chunking.md -->
 
-# Task 8 — Default System Prompt: Chunked-Artifact Guidance
+# Task 4 — Default System Prompt: Chunked-Artifact Guidance
 
 ## Agent Instructions
 
@@ -14,7 +14,7 @@ You are a software engineer implementing one module of a larger system. Your sco
 
 **CRITICAL POST-WORK:** After completing this task:
 1. Run `services/worker-service/.venv/bin/python -m pytest services/worker-service/tests/test_system_prompts.py -v` (locate or create this test file).
-2. Update `progress.md` row 8 to "Done".
+2. Update `progress.md` row 4 to "Done".
 
 ## Context
 
