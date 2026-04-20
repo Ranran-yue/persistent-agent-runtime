@@ -24,10 +24,11 @@ The original #85 bug was `init_chat_model(timeout=300, max_retries=0)` silently 
 ## Shared contract
 
 - `create_llm` signature: `create_llm(pool, provider, model_name, temperature, *, transport: LLMTransportConfig) -> BaseChatModel`. Callers must pass `transport=` as a kwarg.
-- **Two call sites in `graph.py`** both get wired:
-  - `agent_node` around `graph.py:850` — add `resolve_transport(agent_config, provider=provider, model=model_name)` immediately above the `providers.create_llm(...)` call and pass as `transport=`.
-  - `_build_summarizer_callable` around `graph.py:1577` — extend the factory's signature to accept `agent_config: dict[str, Any]`, pass that through from its call site (around `graph.py:1233`), then inside the factory call `resolve_transport(agent_config, provider=provider, model=effective_model)` and pass as `transport=`. The summarizer's `ainvoke` at ~`graph.py:1584` stays unchanged.
-- Grep after the change: `grep -n "providers.create_llm" services/worker-service/executor/graph.py` must show both calls using `transport=`.
+- **Three LLM-construction sites** get wired:
+  - `agent_node` in `graph.py` around line 850 — add `resolve_transport(agent_config, provider=provider, model=model_name)` immediately above the `providers.create_llm(...)` call and pass as `transport=`.
+  - `_build_summarizer_callable` in `graph.py` around line 1577 — extend the factory's signature to accept `agent_config: dict[str, Any]`, pass that through from its call site (around `graph.py:1233`), then inside the factory call `resolve_transport(agent_config, provider=provider, model=effective_model)` and pass as `transport=`. The summarizer's `ainvoke` at ~`graph.py:1584` stays unchanged.
+  - **Tier-3 compaction summarizer** in `executor/compaction/summarizer.py` around line 397 — currently calls `init_chat_model(model=..., timeout=120, max_retries=0)`, the exact pattern that triggers the silent-drop warning. Must be rewritten to go through `providers.create_llm` with a resolved `LLMTransportConfig`. This requires threading a `pool` and either `agent_config` or a pre-resolved transport through `summarize_slice` and its caller in `executor/compaction/pipeline.py`. If the caller doesn't have `agent_config` available, it's acceptable to pass `pool` only and let `summarize_slice` call `resolve_transport(None, provider=..., model=...)` for platform defaults — document this trade-off inline (and add a TODO to plumb agent_config when a future task requires per-agent summarizer tuning).
+- Grep after the change: `grep -rn "init_chat_model" services/worker-service/` must be zero matches. `grep -n "providers.create_llm" services/worker-service/executor/graph.py` must show both graph.py calls using `transport=`; the compaction summarizer call in `summarizer.py` must also route through `providers.create_llm`.
 - **Per-provider construction details** (native fields, no `timeout=`):
   - **Bedrock:** build `botocore.config.Config(connect_timeout=transport.connect_timeout_s, read_timeout=transport.read_timeout_s, retries={"max_attempts": 0})`; build `boto3.client("bedrock-runtime", region_name=region, config=config)`; construct `ChatBedrockConverse(model=..., temperature=..., region_name=region, client=client, max_tokens=transport.max_output_tokens)`. Preserve the existing `os.environ["AWS_BEARER_TOKEN_BEDROCK"] = api_key` pattern for DB-stored Bedrock API keys.
   - **OpenAI:** `ChatOpenAI(model=..., temperature=..., api_key=api_key, request_timeout=transport.read_timeout_s, max_retries=0, max_tokens=transport.max_output_tokens)`.
@@ -65,8 +66,11 @@ Do NOT raise. The partial AIMessage flows downstream exactly as today.
 
 - `services/worker-service/executor/providers.py` (rewrite)
 - `services/worker-service/executor/graph.py` (modify — both `create_llm` call sites + summarizer-factory signature + `_is_max_tokens_stop` helper + WARN after agent_node's `ainvoke`)
+- `services/worker-service/executor/compaction/summarizer.py` (modify — replace the `init_chat_model` call near line 397 with a call through `providers.create_llm`)
+- `services/worker-service/executor/compaction/pipeline.py` (modify if needed — thread `pool` / `agent_config` into the summarizer callable)
 - `services/worker-service/tests/test_providers_transport.py` (new)
-- `services/worker-service/tests/test_long_output_no_timeout.py` (new — regression guard; see "Tests" below)
+- `services/worker-service/tests/test_long_output_no_timeout.py` (new — regression guard across all THREE construction sites; see "Tests" below)
+- `services/worker-service/tests/test_compaction_summarizer.py` / `test_compaction_cost_ledger.py` (modify — existing tests patch `executor.compaction.summarizer.init_chat_model`; migrate to patch `executor.compaction.summarizer.providers.create_llm` or add a `pool=None` fallback path that preserves the legacy patching for tests — whichever is smaller)
 
 ## Dependencies
 
@@ -97,7 +101,7 @@ Parallel structure across three providers:
   - `llm.max_tokens == transport.max_output_tokens`.
   - `llm.model_kwargs` contains none of `timeout`, `default_request_timeout`, `max_retries`, `max_tokens`.
   - Same one-shot INFO log assertion as OpenAI.
-- **Regression guard (all three):** `warnings.catch_warnings(record=True)` around each `create_llm` call; assert no `UserWarning` matching `r".*was transferred to model_kwargs.*"`.
+- **Regression guard (all three providers AND all three construction sites):** `warnings.catch_warnings(record=True)` around each `create_llm` call; assert no `UserWarning` matching `r".*was transferred to model_kwargs.*"`. Include the compaction-summarizer path explicitly so a future re-introduction of `init_chat_model` on that code path is caught.
 
 Test the `_is_max_tokens_stop` helper in a separate small parametrized test — cover `{"stopReason": "max_tokens"}`, `{"stop_reason": "max_tokens"}`, `{"finish_reason": "length"}`, `{}`, `None`, and negative cases (`"end_turn"` / `"stop"`).
 

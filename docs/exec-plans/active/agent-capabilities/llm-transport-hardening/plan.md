@@ -60,16 +60,17 @@ No DB migration. No Console changes. No new conversation-log kinds.
 ```
 Task 1 (transport.py resolver)
    │
-   ▼
-Task 2 (providers.py + graph.py call-site wiring)  ──► regression test
+   ├──► Task 2 (providers.py + graph.py + compaction/summarizer.py wiring)
+   │           ──► regression test across all three init_chat_model sites
+   │
+   └──► Task 3 (API agent_config.llm_transport, Java)
+                (bounds drift test reads transport.py)
 
-Task 3 (API agent_config.llm_transport) ──► must land AFTER Task 1
-                                           (bounds drift test reads transport.py)
-
-Task 4 (System prompt chunking guidance) ──► independent
+Task 4 (System prompt chunking guidance) ──► independent, but serialize
+        after Task 2 (both edit graph.py; run via worktree if parallel)
 ```
 
-Four tasks, two of which can run in parallel. Roughly 300 lines of production code + ~200 lines of tests total.
+Four tasks. Tasks 2 and 3 can run in parallel (Task 3 is Java, Task 2 is Python). Task 4 must either land after Task 2 or run in an isolated worktree because both modify `graph.py`. Roughly 350 lines of production code + ~250 lines of tests total.
 
 ---
 

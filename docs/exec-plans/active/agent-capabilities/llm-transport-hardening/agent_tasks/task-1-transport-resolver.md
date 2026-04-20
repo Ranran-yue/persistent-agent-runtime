@@ -26,6 +26,7 @@ Introduce a small pure stdlib module that returns `(connect_timeout_s, read_time
   - `connect_timeout_s ∈ [1, 60]`
   - `read_timeout_s ∈ [10, 900]`
   - `max_output_tokens ∈ [256, 200_000]`
+- The upper bound on `read_timeout_s` (900s = 15min) is intentionally larger than the submit-form default `task_timeout_seconds` (60s dev / typically much higher in production). The task-level timeout is authoritative via `_await_or_cancel`: it cancels the in-flight `ainvoke` operation regardless of how large `read_timeout_s` is. So an operator who legitimately needs a long-running LLM call sets BOTH `task_timeout_seconds` and `read_timeout_s` appropriately; they do not conflict. Add a comment in the module docstring explaining this.
 - **Out-of-bounds overrides** are clamped to the nearest bound AND emit a `WARN` log (`transport.override_clamped`).
 - **Non-numeric overrides** (string, NaN, Infinity, bool) fall back to defaults with a `WARN` log (`transport.override_invalid_type` / `transport.override_non_finite`).
 - **Returned `LLMTransportConfig` is a frozen dataclass.**
